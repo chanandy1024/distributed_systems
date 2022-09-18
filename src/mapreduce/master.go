@@ -50,7 +50,6 @@ func (mr *MapReduce) SendRPC(worker string, args *DoJobArgs, workersChannel chan
 	success := call(worker, "Worker.DoJob", args, &reply)
 	if !success {
 		fmt.Printf("Worker failed in %s job, reassigning...\n", job)
-		//delete(mr.Workers, worker)
 		new_worker := mr.FetchWorker(workersChannel)
 		mr.SendRPC(new_worker, args, workersChannel, jobType)
 	} else {
