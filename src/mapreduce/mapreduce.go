@@ -1,16 +1,19 @@
 package mapreduce
 
-import "fmt"
-import "os"
-import "log"
-import "strconv"
-import "encoding/json"
-import "sort"
-import "container/list"
-import "net/rpc"
-import "net"
-import "bufio"
-import "hash/fnv"
+import (
+	"bufio"
+	"container/list"
+	"encoding/json"
+	"fmt"
+	"hash/fnv"
+	"log"
+	"net"
+	"net/rpc"
+	"os"
+	"sort"
+	"strconv"
+	"sync"
+)
 
 // import "os/exec"
 
@@ -64,6 +67,7 @@ type MapReduce struct {
   Workers map[string]*WorkerInfo 
 
   // add any additional state here
+  mutex sync.Mutex
 }
 
 func InitMapReduce(nmap int, nreduce int,
@@ -78,6 +82,7 @@ func InitMapReduce(nmap int, nreduce int,
   mr.DoneChannel = make(chan bool)
 
   // initialize any additional state here
+  mr.Workers = make(map[string]*WorkerInfo)
   return mr
 }
 
