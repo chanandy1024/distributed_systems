@@ -56,7 +56,8 @@ func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
     if pingedViewNum == vs.curView.Viewnum {
       vs.acked = true
     } else if pingedViewNum == 0 {
-      vs.reassign(vs.curView.Backup, "")
+      // primary restarted
+      vs.reassign(vs.curView.Backup, vs.idleServer)
       vs.changeView()
     }
   } else if pingedServer == vs.curView.Backup {
