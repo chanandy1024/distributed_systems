@@ -17,6 +17,26 @@ type ViewServer struct {
 
 
   // Your declarations here.
+  namesToTimesMap map[string]time.Time
+  curView View
+  acked bool
+  idleServer string
+}
+
+//
+// reassign the servers
+//
+func (vs *ViewServer) reassign(primary string, backup string) {
+  vs.curView.Primary = primary
+  vs.curView.Backup = backup
+}
+
+//
+// change views
+//
+func (vs *ViewServer) changeView() {
+  vs.acked = false
+  vs.curView.Viewnum ++
 }
 
 //
@@ -26,6 +46,35 @@ func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
 
   // Your code here.
 
+  pingedServer, pingedViewNum := args.Me, args.Viewnum
+  currentTime := time.Now()
+
+  // update latest ping time
+  vs.namesToTimesMap[pingedServer] = currentTime
+
+  if pingedServer == vs.curView.Primary {
+    if pingedViewNum == vs.curView.Viewnum {
+      vs.acked = true
+    } else if pingedViewNum == 0 {
+      vs.reassign(vs.curView.Backup, "")
+      vs.changeView()
+    }
+  } else if pingedServer == vs.curView.Backup {
+    // backup restarted
+    if pingedViewNum == 0 && vs.acked {
+      vs.reassign(vs.curView.Primary, vs.idleServer)
+      vs.changeView()
+    }
+  } else {
+    // the first ping
+    if vs.curView.Viewnum == 0 {
+      vs.reassign(pingedServer, "")
+      vs.changeView()
+    } else {
+        vs.idleServer = pingedServer
+      }
+  }
+  reply.View = vs.curView
   return nil
 }
 
@@ -35,7 +84,7 @@ func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
 func (vs *ViewServer) Get(args *GetArgs, reply *GetReply) error {
 
   // Your code here.
-
+  reply.View = vs.curView
   return nil
 }
 
@@ -48,6 +97,26 @@ func (vs *ViewServer) Get(args *GetArgs, reply *GetReply) error {
 func (vs *ViewServer) tick() {
 
   // Your code here.
+  // vs.mu.Lock()
+  // defer vs.mu.Unlock()
+  if (time.Since(vs.namesToTimesMap[vs.idleServer]) >= DeadPings*PingInterval) {
+    vs.idleServer = ""
+  }
+  if !vs.acked {
+    return
+  }
+  if (time.Since(vs.namesToTimesMap[vs.curView.Primary]) >= DeadPings*PingInterval) {
+    vs.reassign(vs.curView.Backup, vs.idleServer)
+    vs.changeView()
+    vs.idleServer = ""
+  }
+  if (time.Since(vs.namesToTimesMap[vs.curView.Backup]) >= DeadPings*PingInterval) {
+    if vs.idleServer != "" {
+      vs.reassign(vs.curView.Primary, vs.idleServer)
+      vs.changeView()
+      vs.idleServer = ""
+    }
+  }
 }
 
 //
@@ -64,7 +133,10 @@ func StartServer(me string) *ViewServer {
   vs := new(ViewServer)
   vs.me = me
   // Your vs.* initializations here.
-
+  vs.curView = View{0, "", ""}
+  vs.acked = false
+  vs.idleServer = ""
+  vs.namesToTimesMap = make(map[string]time.Time)
   // tell net/rpc about our RPC server and handlers.
   rpcs := rpc.NewServer()
   rpcs.Register(vs)
