@@ -45,7 +45,8 @@ func (vs *ViewServer) changeView() {
 func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
 
   // Your code here.
-
+  vs.mu.Lock()
+	defer vs.mu.Unlock()
   pingedServer, pingedViewNum := args.Me, args.Viewnum
   currentTime := time.Now()
 
@@ -98,8 +99,8 @@ func (vs *ViewServer) Get(args *GetArgs, reply *GetReply) error {
 func (vs *ViewServer) tick() {
 
   // Your code here.
-  // vs.mu.Lock()
-  // defer vs.mu.Unlock()
+  vs.mu.Lock()
+  defer vs.mu.Unlock()
   if (time.Since(vs.namesToTimesMap[vs.idleServer]) >= DeadPings*PingInterval) {
     vs.idleServer = ""
   }

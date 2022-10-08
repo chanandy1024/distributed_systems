@@ -3,17 +3,22 @@ package pbservice
 import "viewservice"
 import "net/rpc"
 import "fmt"
-
 // You'll probably need to uncomment these:
-// import "time"
-// import "crypto/rand"
-// import "math/big"
+import "crypto/rand"
+import "math/big"
 
-
+// generate unique numbers
+func nrand() int64 {
+  max := big.NewInt(int64(1) << 62)
+  bigx, _ := rand.Int(rand.Reader, max)
+  x := bigx.Int64()
+  return x
+ }
 
 type Clerk struct {
   vs *viewservice.Clerk
   // Your declarations here
+  me string
 }
 
 
@@ -21,7 +26,7 @@ func MakeClerk(vshost string, me string) *Clerk {
   ck := new(Clerk)
   ck.vs = viewservice.MakeClerk(me, vshost)
   // Your ck.* initializations here
-
+  ck.me = me
   return ck
 }
 
@@ -49,7 +54,7 @@ func call(srv string, rpcname string,
     return false
   }
   defer c.Close()
-    
+
   err := c.Call(rpcname, args, reply)
   if err == nil {
     return true
@@ -69,8 +74,18 @@ func call(srv string, rpcname string,
 func (ck *Clerk) Get(key string) string {
 
   // Your code here.
-
-  return "???"
+  var getReply GetReply
+  args := GetArgs{key, ck.me, nrand()}
+  ok := false
+  for ok==false {
+	  getReply.Value = ""
+	  getReply.Err = ""
+	  ok = call(ck.vs.Primary(), "PBServer.Get", args, &getReply)
+	  if getReply.Err != "" {
+		  ok=false
+	  }
+  }
+  return getReply.Value
 }
 
 //
@@ -80,7 +95,18 @@ func (ck *Clerk) Get(key string) string {
 func (ck *Clerk) PutExt(key string, value string, dohash bool) string {
 
   // Your code here.
-  return "???"
+  var putReply PutReply
+  args := PutArgs{key, value, dohash, ck.me, nrand()}
+  ok := false
+  for ok==false {
+	  putReply.Err = ""
+    ok = call(ck.vs.Primary(), "PBServer.Put", &args, &putReply)
+    if putReply.Err != "" {
+      ok = false
+    }
+  }
+  // PutHash
+  return putReply.PreviousValue
 }
 
 func (ck *Clerk) Put(key string, value string) {

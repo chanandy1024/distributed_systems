@@ -1,17 +1,18 @@
 package pbservice
 
-import "net"
-import "fmt"
-import "net/rpc"
-import "log"
-import "time"
-import "viewservice"
-import "os"
-import "syscall"
-import "math/rand"
-import "sync"
-
-//import "strconv"
+import (
+	"fmt"
+	"log"
+	"math/rand"
+	"net"
+	"net/rpc"
+	"os"
+	"strconv"
+	"sync"
+	"syscall"
+	"time"
+	"viewservice"
+)
 
 // Debugging
 const Debug = 0
@@ -32,22 +33,114 @@ type PBServer struct {
   done sync.WaitGroup
   finish chan interface{}
   // Your declarations here.
+  // mutex for concurrent access to map
+  mu sync.Mutex
+  view viewservice.View
+  dataMap map[string]string
+  randMap map[int64]string
+  // makes sure all the replicate requests are done before exiting
+  replicateDone sync.WaitGroup
 }
 
 func (pb *PBServer) Put(args *PutArgs, reply *PutReply) error {
   // Your code here.
+  pb.mu.Lock()	
+  pb.replicateDone.Wait()	
+	pb.replicateDone.Add(1)	
+  // check if key already exists in the map
+  val, exist := pb.randMap[args.Rand]
+  if exist {
+  	reply.PreviousValue = val
+    pb.replicateDone.Done()
+  	pb.mu.Unlock()
+  	return nil
+  }
+  var tmpVal string
+  if args.DoHash {
+  	tmpVal, exist = pb.dataMap[args.Key]
+  	if !exist {
+  		tmpVal = ""
+  	}
+  	args.Value = strconv.Itoa(int(hash(tmpVal + args.Value)))
+  }
+  pb.dataMap[args.Key] = args.Value
+  pb.randMap[args.Rand] = tmpVal
+  reply.PreviousValue = tmpVal
+  pb.mu.Unlock()
+
+  if pb.view.Backup == "" {
+    pb.replicateDone.Done()
+    return nil
+  }
+  reply.Err = OK
+  if pb.view.Primary == pb.me {
+  	// forward put to backup server
+  	args.DoHash = false
+  	ok := false
+  	for ok==false {
+      if pb.view.Backup == "" {
+        pb.replicateDone.Done()
+        reply.Err = ErrWrongServer
+        return nil
+      }
+	    ok = call(pb.view.Backup, "PBServer.Put", args, &reply)
+  	}
+    pb.replicateDone.Done()
+  } else if pb.view.Backup == pb.me {
+    pb.replicateDone.Done()
+  	reply.Err = ErrWrongServer
+  } else {
+    reply.Err = ErrWrongServer
+    pb.replicateDone.Done()
+  }
   return nil
 }
 
 func (pb *PBServer) Get(args *GetArgs, reply *GetReply) error {
   // Your code here.
+  pb.mu.Lock()
+  defer pb.mu.Unlock()
+  var exist bool
+  if pb.view.Primary == pb.me {
+  	reply.Value, exist = pb.dataMap[args.Key]
+  	if !exist {
+  		reply.Err = ErrNoKey
+  	}
+  } else {
+  	reply.Err = ErrWrongServer
+  }
   return nil
 }
 
 
+func (pb *PBServer) CopyToBackup(args *NewBackupArgs, reply *NewBackupReply) error {
+	pb.mu.Lock()
+	defer pb.mu.Unlock()
+	pb.dataMap = args.DataMap
+	pb.randMap = args.RandMap
+	reply.Value = OK
+	return nil
+}
 // ping the viewserver periodically.
 func (pb *PBServer) tick() {
   // Your code here.
+  incomingView, _ := pb.vs.Ping(pb.view.Viewnum)
+  // check if backup is new
+  if incomingView.Primary == pb.me && incomingView.Backup != "" && incomingView.Backup != pb.view.Backup {
+    var reply NewBackupReply
+    pb.mu.Lock()
+    // keep trying until success
+    ok := false
+    for ok == false {
+      args := NewBackupArgs{pb.dataMap, pb.randMap}
+      ok = call(incomingView.Backup, "PBServer.CopyToBackup", args, &reply)
+      if pb.view.Backup == "" {
+        break
+      }
+    }
+    pb.mu.Unlock()
+  }
+  pb.view = incomingView
 }
 
 
@@ -65,7 +158,9 @@ func StartServer(vshost string, me string) *PBServer {
   pb.vs = viewservice.MakeClerk(me, vshost)
   pb.finish = make(chan interface{})
   // Your pb.* initializations here.
-
+  pb.view = viewservice.View{Viewnum: 0, Primary: "", Backup: ""}
+  pb.dataMap = make(map[string]string)
+  pb.randMap = make(map[int64]string)
   rpcs := rpc.NewServer()
   rpcs.Register(pb)
 
