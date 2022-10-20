@@ -137,22 +137,13 @@ func call(srv string, name string, args interface{}, reply interface{}) bool {
 	return false
 }
 
-func (px *Paxos) RetrieveInstance(seq int) State {
-	px.mu.Lock()
-	defer px.mu.Unlock()
-	_, exist := px.instances[seq]
-
-	if !exist {
-		px.instances[seq] = State{-1, -1, nil, false}
-	} else {
-    px.maxSeqNum = getMax(seq, px.maxSeqNum)
-  }
-	return px.instances[seq]
-}
-
 func (px *Paxos) PrepAcceptor(args *PrepareArgs, reply *PrepareReply) error {
 	px.mu.Lock()
 	defer px.mu.Unlock()
+	_, exist := px.instances[args.Seq]
+	if !exist {
+		px.instances[args.Seq] = State{-1, -1, nil, false}
+	}
 	instance := px.instances[args.Seq]
 	// update
 	reply.DoneSeq = px.done[px.me]
@@ -334,11 +325,7 @@ func (px *Paxos) Done(seq int) {
 	// Your code here.
 	px.mu.Lock()
 	defer px.mu.Unlock()
-  	px.done[px.me] = getMax(px.done[px.me], seq)
-	// // highest sequence number for done
-	// if seq > px.done[px.me] {
-	// 	px.done[px.me] = seq
-	// }
+  px.done[px.me] = getMax(px.done[px.me], seq)
 }
 
 // the application wants to know the
@@ -495,5 +482,6 @@ func Make(peers []string, me int, rpcs *rpc.Server) *Paxos {
 			}
 		}()
 	}
+
 	return px
 }
