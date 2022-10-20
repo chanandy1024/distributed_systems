@@ -202,9 +202,8 @@ func (px *Paxos) DecideAcceptor(args *DecideArgs, reply *DecideReply) error {
 	if args.N >= instance.Np {
 		instance.Na = args.N
 		instance.Np = args.N
-		instance.Va = args.V
 	}
-	px.maxSeqNum = getMax(args.Seq, px.maxSeqNum)
+	instance.Va = args.V
 	instance.Done = true
 	px.instances[args.Seq] = instance
 	reply.Status = DecideOK
