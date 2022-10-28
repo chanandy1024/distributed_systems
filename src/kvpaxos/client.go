@@ -2,17 +2,19 @@ package kvpaxos
 
 import "net/rpc"
 import "fmt"
+import "time"
 
 type Clerk struct {
   servers []string
   // You will have to modify this struct.
+  me int64
 }
-
 
 func MakeClerk(servers []string) *Clerk {
   ck := new(Clerk)
   ck.servers = servers
   // You'll have to add code here.
+  ck.me = nrand()
   return ck
 }
 
@@ -39,7 +41,7 @@ func call(srv string, rpcname string,
     return false
   }
   defer c.Close()
-    
+
   err := c.Call(rpcname, args, reply)
   if err == nil {
     return true
@@ -56,7 +58,18 @@ func call(srv string, rpcname string,
 //
 func (ck *Clerk) Get(key string) string {
   // You will have to modify this function.
-  return ""
+  // Make an unique seq num to avoid multi call when conn fails
+  args := GetArgs{key, ck.me, nrand()}
+  var reply GetReply
+  for {
+    for _, server := range ck.servers {
+      ok := call(server, "KVPaxos.Get", args, &reply)
+      if ok {
+        return reply.Value
+      }
+    }
+    time.Sleep(20 * time.Millisecond)
+  }
 }
 
 //
@@ -65,7 +78,18 @@ func (ck *Clerk) Get(key string) string {
 //
 func (ck *Clerk) PutExt(key string, value string, dohash bool) string {
   // You will have to modify this function.
-  return ""
+  // Make an unique seq num to avoid multi call when conn fails
+  args := &PutArgs{key, value, dohash, ck.me, nrand()}
+  var reply PutReply
+  for {
+    for _, server := range ck.servers {
+      ok := call(server, "KVPaxos.Put", args, &reply)
+      if ok {
+        return reply.PreviousValue
+      }
+    }
+    time.Sleep(20 * time.Millisecond)
+  }
 }
 
 func (ck *Clerk) Put(key string, value string) {

@@ -80,7 +80,7 @@ type State struct {
 	Na   int         // highest accepted proposal
 	Va   interface{} // value of highest accepted proposal
 	Done bool        // whether consensus has been reached
-  // Value interface{} // decided value
+	// Value interface{} // decided value
 }
 
 type Paxos struct {
@@ -225,7 +225,7 @@ func (px *Paxos) Proposer(seq int, v interface{}) {
 	n := 0
 	//decided := false
 	majoritySize := len(px.peers) / 2
-  	decided := false
+	decided := false
 	for !decided && !px.dead {
 		agreedPeers := 0
 		highestN := -1
@@ -271,7 +271,7 @@ func (px *Paxos) Proposer(seq int, v interface{}) {
 					px.done[i] = reply.DoneSeq
 				}
 				px.mu.Unlock()
-        		agreedPeers++
+				agreedPeers++
 			}
 		}
 		if agreedPeers <= majoritySize {
@@ -324,7 +324,7 @@ func (px *Paxos) Done(seq int) {
 	// Your code here.
 	px.mu.Lock()
 	defer px.mu.Unlock()
-  px.done[px.me] = getMax(px.done[px.me], seq)
+	px.done[px.me] = getMax(px.done[px.me], seq)
 }
 
 // the application wants to know the
@@ -392,16 +392,16 @@ func (px *Paxos) Status(seq int) (bool, interface{}) {
 	if seq < px.Min() {
 		return false, nil
 	}
-  	px.mu.Lock()
-  	defer px.mu.Unlock()
-  	_, exist := px.instances[seq]
-  	if exist {
-    	px.maxSeqNum = getMax(seq, px.maxSeqNum)
-  	} else {
-    	px.instances[seq] = State{-1, -1, nil, false}
-  	}
-  	instance := px.instances[seq]
-  	return instance.Done, instance.Va
+	px.mu.Lock()
+	defer px.mu.Unlock()
+	_, exist := px.instances[seq]
+	if exist {
+		px.maxSeqNum = getMax(seq, px.maxSeqNum)
+	} else {
+		px.instances[seq] = State{-1, -1, nil, false}
+	}
+	instance := px.instances[seq]
+	return instance.Done, instance.Va
 }
 
 // tell the peer to shut itself down.
