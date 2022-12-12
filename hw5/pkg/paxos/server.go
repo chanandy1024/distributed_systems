@@ -2,6 +2,7 @@ package paxos
 
 import (
 	"coms4113/hw5/pkg/base"
+	"fmt"
 )
 
 const (
@@ -66,15 +67,290 @@ func NewServer(peers []base.Address, me int, proposedValue interface{}) *Server 
 	}
 }
 
+func (server *Server) ProposeAcceptor(message base.Message, nodes []base.Node) []base.Node {
+	proposedMsg, exist := message.(*ProposeRequest)
+	if !exist {
+		fmt.Println("Message can't be read")
+		return nodes
+	}
+	// based on hw3 code
+	updatedNode := server.copy()
+	var res ProposeResponse
+	if proposedMsg.N > server.n_p {
+		// If N > Np then: Update Np = N, Reply <PROPOSE-OK, Na, Va>
+		updatedNode.n_p = proposedMsg.N
+		// update and return 
+		res = ProposeResponse{
+			base.MakeCoreMessage(message.To(), message.From()),
+			true,
+			updatedNode.n_p,
+			updatedNode.n_a,
+			updatedNode.v_a,
+			proposedMsg.SessionId}
+		updatedNode.SetSingleResponse(&res)
+		nodes = append(nodes, updatedNode)
+	} else {
+		// can't accept
+		res = ProposeResponse{
+			base.MakeCoreMessage(message.To(), message.From()),
+			false,
+			updatedNode.n_p,
+			updatedNode.n_a,
+			updatedNode.v_a,
+			proposedMsg.SessionId}
+		updatedNode.SetSingleResponse(&res)
+		nodes = append(nodes, updatedNode)
+	}
+	return nodes
+}
+
+func (server *Server) DecideAcceptor(message base.Message, nodes []base.Node) []base.Node {
+	proposedMsg, exist := message.(*DecideRequest)
+	if !exist {
+		fmt.Println("Message can't be read")
+		return nodes
+	}
+	updatedNode := server.copy()
+	updatedNode.agreedValue = proposedMsg.V
+	// Note: no need to respond to a Decide Message, thus directly append
+	nodes = append(nodes, updatedNode)
+	return nodes
+}
+
+func (server *Server) AcceptAcceptor(message base.Message, nodes []base.Node) []base.Node {
+	proposedMsg, exist := message.(*AcceptRequest)
+	if !exist {
+		fmt.Println("Message can't be read")
+		return nodes
+	}
+	updatedNode := server.copy()
+	var res AcceptResponse
+	// If N >= Np then: Update Np = N, Na = N, Va = V, Reply <ACCEPT-OK>
+	if proposedMsg.N >= updatedNode.n_p {
+		updatedNode.n_p = proposedMsg.N
+		updatedNode.n_a = proposedMsg.N
+		updatedNode.v_a = proposedMsg.V
+		updatedNode.proposer.SessionId = proposedMsg.SessionId
+		res = AcceptResponse{
+			base.MakeCoreMessage(message.To(), message.From()),
+			true,
+			updatedNode.n_p,
+			proposedMsg.SessionId}
+		updatedNode.SetSingleResponse(&res)
+		nodes = append(nodes, updatedNode)
+	} else {
+		// can't accept
+		updatedNode.proposer.SessionId = proposedMsg.SessionId
+		res = AcceptResponse{
+			base.MakeCoreMessage(message.To(), message.From()),
+			false,
+			updatedNode.n_p,
+			proposedMsg.SessionId}
+		updatedNode.SetSingleResponse(&res)
+		nodes = append(nodes, updatedNode)
+	}
+	return nodes
+}
+
+// first implement the acceptors
+func (server *Server) Acceptor(message base.Message) []base.Node {
+	nodes := make([]base.Node, 0)
+	switch message.(type) {
+	case *ProposeRequest:
+		return server.ProposeAcceptor(message, nodes)
+	case *DecideRequest:
+		return server.DecideAcceptor(message, nodes)
+	case *AcceptRequest:
+		return server.AcceptAcceptor(message, nodes)
+	}
+	return nodes
+}
+
+func (server *Server) AcceptProposer(message base.Message, nodes []base.Node) []base.Node {
+	// return the states
+	msgResponse, exist := message.(*ProposeResponse)
+	if !exist {
+		fmt.Println("Message can't be read")
+		return nodes
+	}
+	numPeers := len(server.peers)
+	majoritySize := numPeers / 2
+	// only run the process for the right session
+	if server.proposer.SessionId == msgResponse.SessionId {
+		if !msgResponse.Ok {
+			node := server.copy()
+			node.proposer.Phase = Propose
+			node.proposer.ResponseCount++
+			nodes = append(nodes, node)
+		} else {
+			agreedPeers := server.proposer.SuccessCount
+			for i, p := range(server.peers) {
+				if server.proposer.Responses[i] == false && msgResponse.From() == p {
+					agreedPeers++
+				}
+			}
+			// if reached consensus, may wait for the rest responses or enter the next phase
+			if agreedPeers > majoritySize {
+				node := server.copy()
+				node.proposer.Phase = Accept
+				// if no v_a is received
+				if base.IsNil(msgResponse.V_a) && base.IsNil(node.proposer.V) {
+					node.proposer.V = node.proposer.InitialValue
+				} else if msgResponse.N_a > node.proposer.N_a_max && !base.IsNil(msgResponse.V_a) {
+					// highest number N
+					node.proposer.N_a_max = msgResponse.N_a
+					node.proposer.V = msgResponse.V_a
+				}
+				// reset node
+				node.proposer.SuccessCount = 0
+				node.proposer.ResponseCount = 0
+				node.proposer.Responses = make([]bool, len(node.peers))
+				// send ProposeRequest to all its peers, including itself
+				res := make([]base.Message, 0)
+				for _, p := range(node.peers) {
+					res = append(res, &AcceptRequest{
+						base.MakeCoreMessage(node.Address(), p),
+						node.proposer.N,
+						node.proposer.V,
+						node.proposer.SessionId})
+				}
+				node.SetResponse(res)
+				nodes = append(nodes, node)
+			} 
+			if agreedPeers < numPeers && server.proposer.ResponseCount < numPeers - 1 {
+				node := server.copy()
+				node.proposer.ResponseCount ++
+				if base.IsNil(msgResponse.V_a) && base.IsNil(node.proposer.V) {
+					node.proposer.V = node.proposer.InitialValue
+				} else if msgResponse.N_a > node.proposer.N_a_max && !base.IsNil(msgResponse.V_a) {
+					// highest number N
+					node.proposer.N_a_max = msgResponse.N_a
+					node.proposer.V = msgResponse.V_a
+				}
+				// loop over peers to see which ones match
+				for i, p := range(node.peers) {
+					if node.proposer.Responses[i] == false && msgResponse.From() == p {
+						node.proposer.SuccessCount++
+						node.proposer.Responses[i] = true
+					}
+				}
+				nodes = append(nodes, node)
+			}
+		}
+	}
+	return nodes
+}
+
+func (server *Server) DecideProposer(message base.Message, nodes []base.Node) []base.Node {
+	// return the states
+	msgResponse, exist := message.(*AcceptResponse)
+	if !exist {
+		fmt.Println("Message can't be read")
+		return nodes
+	}
+	numPeers := len(server.peers)
+	majoritySize := numPeers / 2
+	// only run the process for the right session
+	if server.proposer.SessionId == msgResponse.SessionId {
+		if !msgResponse.Ok {
+			node := server.copy()
+			node.proposer.Phase = Accept
+			node.proposer.ResponseCount++
+			nodes = append(nodes, node)
+		} else {
+			agreedPeers := server.proposer.SuccessCount
+			for i, p := range(server.peers) {
+				if server.proposer.Responses[i] == false && msgResponse.From() == p {
+					agreedPeers++
+				}
+			}
+			// if reached consensus, may wait for the rest responses or enter the next phase
+			if agreedPeers > majoritySize {
+				node := server.copy()
+				node.proposer.Phase = Decide
+				node.agreedValue = node.proposer.V
+				// reset node
+				node.proposer.SuccessCount = 0
+				node.proposer.ResponseCount = 0
+				node.proposer.Responses = make([]bool, len(node.peers))
+				// send ProposeRequest to all its peers, including itself
+				res := make([]base.Message, 0)
+				for _, p := range(node.peers) {
+					res = append(res, &DecideRequest{
+						base.MakeCoreMessage(node.Address(), p),
+						node.proposer.V,
+						msgResponse.SessionId})
+				}
+				node.SetResponse(res)
+				nodes = append(nodes, node)
+			} 
+			if agreedPeers < numPeers && server.proposer.ResponseCount < numPeers - 1 {
+				node := server.copy()
+				node.proposer.ResponseCount ++
+				// loop over peers to see which ones match
+				for i, p := range(node.peers) {
+					if node.proposer.Responses[i] == false && msgResponse.From() == p {
+						node.proposer.SuccessCount++
+						node.proposer.Responses[i] = true
+					}
+				}
+				nodes = append(nodes, node)
+			}
+		}
+	}
+	return nodes
+}
+
+// implement the proposer
+func (server *Server) Proposer(message base.Message) []base.Node {
+	nodes := make([]base.Node, 0)
+	switch message.(type) {
+	case *ProposeResponse:
+		return server.AcceptProposer(message, nodes)
+	case *AcceptResponse:
+		return server.DecideProposer(message, nodes)
+	}
+	return nodes
+}
+
 func (server *Server) MessageHandler(message base.Message) []base.Node {
 	//TODO: implement it
-	panic("implement me")
+	switch message.(type) {
+	case *ProposeRequest, *AcceptRequest, *DecideRequest:
+		return server.Acceptor(message)
+	case *ProposeResponse, *AcceptResponse:
+		return server.Proposer(message)
+	}
+	return []base.Node{}
 }
 
 // To start a new round of Paxos.
+/*
+It is the starting point for proposing a value for consensus. 
+The proposed value is InitialValue if no v_a is received. The first task of this function 
+is to renew the proposer’s fields. Then send ProposeRequest to all its peers, including itself.
+*/
 func (server *Server) StartPropose() {
-	//TODO: implement it
-	panic("implement me")
+	// if no v_a is received
+	if base.IsNil(server.v_a) && base.IsNil(server.proposer.V) {
+		server.proposer.V = server.proposer.InitialValue
+	}
+	// renew fields
+	server.proposer.Phase = Propose
+	server.proposer.SuccessCount = 0
+	server.proposer.ResponseCount = 0
+	server.proposer.Responses = make([]bool, len(server.peers))
+	server.proposer.N++
+	server.proposer.SessionId++
+	// send ProposeRequest to all its peers, including itself
+	res := make([]base.Message, 0)
+	for _, p := range(server.peers) {
+		res = append(res, &ProposeRequest{
+			base.MakeCoreMessage(server.Address(), p),
+			server.proposer.N,
+			server.proposer.SessionId})
+	}
+	server.SetResponse(res)
 }
 
 // Returns a deep copy of server node
